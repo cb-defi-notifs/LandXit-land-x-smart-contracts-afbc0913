@@ -8,6 +8,7 @@ import "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 
 interface IxToken is IERC20 {
    function symbol() external view returns (string memory);
+   function claim() external;
    function crop() external view returns (string memory);
    function burn(uint256 amount) external; 
    function mint(address account, uint256 amount) external;
@@ -18,6 +19,7 @@ interface IxToken is IERC20 {
 }
 
 interface IcToken is IERC20 {
+   function balanceOf(address account) external view returns (uint256);
    function symbol() external view returns (string memory);
    function crop() external view returns (string memory);
    function mint(address account, uint256 amount) external;
@@ -49,12 +51,12 @@ contract XTokenBridge is NonblockingLzApp {
    function estimateFee(address _token, uint16 _dstChainId, address _toAddress, uint _amount) public view returns (uint nativeFee, uint zroFee) {
         string memory tokenType = _getTokenType(_token);
         if (keccak256(abi.encodePacked(tokenType)) == keccak256(abi.encodePacked("x"))) {
-         bytes memory payload = abi.encode(
-             tokenType,
-             IxToken(_token).crop(),
-             _toAddress,
-             _amount
-         );
+            bytes memory payload = abi.encode(
+                tokenType,
+                IxToken(_token).crop(),
+                _toAddress,
+                _amount
+            );
 
          return lzEndpoint.estimateFees(_dstChainId, address(this), payload, false, bytes(""));
         }
@@ -62,7 +64,7 @@ contract XTokenBridge is NonblockingLzApp {
         if (keccak256(abi.encodePacked(tokenType)) == keccak256(abi.encodePacked("c"))) {
               bytes memory payload = abi.encode(
                     tokenType,
-                    IxToken(_token).crop(),
+                    IcToken(_token).crop(),
                     _toAddress,
                     _amount
                 );
@@ -74,6 +76,7 @@ contract XTokenBridge is NonblockingLzApp {
    function sendToken(address _token, uint16 _dstChainId, address _toAddress, uint _amount) public payable {
         string memory tokenType = _getTokenType(_token);
         if (keccak256(abi.encodePacked(tokenType)) == keccak256(abi.encodePacked("x"))) {
+            require(_token == xTokenRouter.getXToken(IxToken(_token).crop()), "not allowed token");
             if (lzEndpoint.getChainId() == (mainChainId - 100)) {
             IxToken(_token).transferFrom(msg.sender, address(this), _amount);
             IxToken(_token).stake(_amount);
@@ -101,6 +104,7 @@ contract XTokenBridge is NonblockingLzApp {
         }
 
         if (keccak256(abi.encodePacked(tokenType)) == keccak256(abi.encodePacked("c"))) {
+             require(_token == xTokenRouter.getCToken(IcToken(_token).crop()), "not allowed token");
              if (lzEndpoint.getChainId() != (mainChainId - 100)) {
                 IcToken(_token).burnFrom(msg.sender, _amount);
              } else {
@@ -147,8 +151,9 @@ contract XTokenBridge is NonblockingLzApp {
             address xToken = xTokenRouter.getXToken(crop);
             address cToken = xTokenRouter.getCToken(crop);
             if (lzEndpoint.getChainId() == (mainChainId - 100)) {
-                (uint xAmount,) = IxToken(xToken).Staked(address(this));
-                IxToken(xToken).unstake(xAmount);
+                if (IcToken(cToken).balanceOf(address(this)) < amount) {
+                    IxToken(xToken).claim();
+                }
                 IcToken(cToken).transfer(to, amount);
             } else {
                 IcToken(cToken).mint(to, amount);
